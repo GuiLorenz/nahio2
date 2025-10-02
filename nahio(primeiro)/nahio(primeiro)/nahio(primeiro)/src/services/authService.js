@@ -4,123 +4,24 @@ import {
   signOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
+  updateProfile as updateFirebaseProfile,
 } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { auth, db } from "../config/firebaseConfig";
-import { COLLECTIONS, USER_TYPES } from "./firebaseStructure";
 
-/**
- * Serviço para gerenciar todas as operações de Autenticação e Perfil do Usuário
- * no Firebase Auth e Firestore.
- */
 class AuthService {
-  /**
-   * Auxiliar privado para padronizar o tratamento de erros.
-   */
-  _handleError(operation, error) {
-    console.error(`Erro ao ${operation}:`, error);
-    return { success: false, error: error.message || "Erro desconhecido" };
+  // Listener para mudanças no estado de autenticação
+  onAuthStateChange(callback) {
+    return onAuthStateChanged(auth, callback);
   }
 
-  /**
-   * Auxiliar privado para determinar o nome da coleção de perfil.
-   */
-  _getProfileCollectionName(userType) {
-    switch (userType) {
-      case USER_TYPES.OLHEIRO:
-        return COLLECTIONS.OLHEIROS;
-      case USER_TYPES.INSTITUICAO:
-        return COLLECTIONS.INSTITUICOES;
-      case USER_TYPES.RESPONSAVEL:
-        return COLLECTIONS.RESPONSAVEIS;
-      default:
-        return null;
-    }
-  }
-
-  /**
-   * Auxiliar privado para salvar o documento base na coleção 'users'.
-   */
-  async _saveBaseUserDoc(uid, email, userType) {
-    const userDocRef = doc(db, COLLECTIONS.USERS, uid);
-    await setDoc(userDocRef, {
-      email: email,
-      userType: userType,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      isActive: true,
-    });
-  }
-
-  /**
-   * Registra um novo usuário no Auth e cria documentos no Firestore.
-   * @param {string} email Email do usuário.
-   * @param {string} password Senha.
-   * @param {string} userType Tipo de usuário ('olheiro', 'instituicao', 'responsavel').
-   * @param {object} additionalData Dados específicos do perfil.
-   * @returns {Promise<{success: boolean, user?: object, error?: string}>}
-   */
-  async register(email, password, userType, additionalData = {}) {
-    try {
-      // Normalizar userType para lowercase
-      const normalizedUserType = userType.toLowerCase();
-
-      // Mapear strings para constantes USER_TYPES
-      let mappedUserType;
-      switch (normalizedUserType) {
-        case "olheiro":
-          mappedUserType = USER_TYPES.OLHEIRO;
-          break;
-        case "instituicao":
-          mappedUserType = USER_TYPES.INSTITUICAO;
-          break;
-        case "responsavel":
-          mappedUserType = USER_TYPES.RESPONSAVEL;
-          break;
-        default:
-          throw new Error("Tipo de usuário inválido");
-      }
-
-      const collectionName = this._getProfileCollectionName(mappedUserType);
-
-      if (!collectionName) {
-        throw new Error("Tipo de usuário inválido para registro");
-      }
-
-      // 1. Criar usuário no Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-      const user = userCredential.user;
-
-      // 2. Criar documento base na coleção 'users'
-      await this._saveBaseUserDoc(user.uid, email, mappedUserType);
-
-      // 3. Criar documento específico do perfil
-      await setDoc(doc(db, collectionName, user.uid), {
-        ...additionalData,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      return { success: true, user };
-    } catch (error) {
-      return this._handleError("registrar usuário", error);
-    }
-  }
-
-  /**
-   * @deprecated Use register() ao invés de registerUser()
-   */
-  async registerUser(email, password, userData, userType) {
-    return this.register(email, password, userType, userData);
-  }
-
-  /**
-   * Realiza o login do usuário.
-   */
+  // Login
   async login(email, password) {
     try {
       const userCredential = await signInWithEmailAndPassword(
@@ -128,229 +29,210 @@ class AuthService {
         email,
         password
       );
-      const user = userCredential.user;
-
-      const userDoc = await getDoc(doc(db, COLLECTIONS.USERS, user.uid));
-      if (!userDoc.exists()) {
-        throw new Error("Dados do usuário não encontrados no Firestore.");
-      }
-
-      return { success: true, user, userData: userDoc.data() };
+      return { success: true, user: userCredential.user };
     } catch (error) {
-      return this._handleError("fazer login", error);
+      console.error("Login error:", error);
+      return { success: false, error: this.getErrorMessage(error.code) };
     }
   }
 
-  /**
-   * Realiza o logout do usuário.
-   */
+  // Logout
   async logout() {
     try {
       await signOut(auth);
       return { success: true };
     } catch (error) {
-      return this._handleError("fazer logout", error);
+      console.error("Logout error:", error);
+      return { success: false, error: "Erro ao fazer logout" };
     }
   }
 
-  /**
-   * Envia um email de redefinição de senha.
-   */
+  // Registro de Olheiro
+  async registerOlheiro(email, password, userData) {
+    try {
+      // Cria o usuário no Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+      const user = userCredential.user;
+
+      // Atualiza o displayName no Firebase Auth
+      await updateFirebaseProfile(user, {
+        displayName: userData.nome,
+      });
+
+      // Cria o documento do usuário no Firestore
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email: email,
+        userType: "olheiro",
+        profile: {
+          nome: userData.nome,
+          telefone: userData.telefone || "",
+          profileImage: "",
+          endereco: {
+            cep: "",
+            logradouro: "",
+            numero: "",
+            complemento: "",
+            bairro: "",
+            cidade: "",
+            estado: "",
+          },
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      return { success: true, user: user };
+    } catch (error) {
+      console.error("Register Olheiro error:", error);
+      return { success: false, error: this.getErrorMessage(error.code) };
+    }
+  }
+
+  // Registro de Instituição
+  async registerInstituicao(email, password, userData) {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+      const user = userCredential.user;
+
+      await updateFirebaseProfile(user, {
+        displayName: userData.nomeEscola,
+      });
+
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email: email,
+        userType: "instituicao",
+        profile: {
+          nomeEscola: userData.nomeEscola,
+          cnpj: userData.cnpj,
+          telefone: userData.telefone || "",
+          profileImage: "",
+          endereco: {
+            cep: userData.cep || "",
+            logradouro: userData.logradouro || "",
+            numero: userData.numero || "",
+            complemento: userData.complemento || "",
+            bairro: userData.bairro || "",
+            cidade: userData.cidade || "",
+            estado: userData.estado || "",
+          },
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      return { success: true, user: user };
+    } catch (error) {
+      console.error("Register Instituicao error:", error);
+      return { success: false, error: this.getErrorMessage(error.code) };
+    }
+  }
+
+  // Registro de Responsável
+  async registerResponsavel(email, password, userData) {
+    try {
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+      const user = userCredential.user;
+
+      await updateFirebaseProfile(user, {
+        displayName: userData.nome,
+      });
+
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email: email,
+        userType: "responsavel",
+        profile: {
+          nome: userData.nome,
+          telefone: userData.telefone || "",
+          profileImage: "",
+          instituicaoId: userData.instituicaoId || null,
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      return { success: true, user: user };
+    } catch (error) {
+      console.error("Register Responsavel error:", error);
+      return { success: false, error: this.getErrorMessage(error.code) };
+    }
+  }
+
+  // Buscar dados do usuário
+  async getUserData(uid) {
+    try {
+      const docRef = doc(db, "users", uid);
+      const docSnap = await getDoc(docRef);
+
+      if (docSnap.exists()) {
+        return { success: true, userData: docSnap.data() };
+      } else {
+        return { success: false, error: "Usuário não encontrado" };
+      }
+    } catch (error) {
+      console.error("Get user data error:", error);
+      return { success: false, error: "Erro ao buscar dados do usuário" };
+    }
+  }
+
+  // Atualizar perfil do usuário
+  async updateUserProfile(uid, profileData) {
+    try {
+      const userRef = doc(db, "users", uid);
+
+      await updateDoc(userRef, {
+        profile: profileData,
+        updatedAt: serverTimestamp(),
+      });
+
+      return { success: true };
+    } catch (error) {
+      console.error("Update profile error:", error);
+      return { success: false, error: "Erro ao atualizar perfil" };
+    }
+  }
+
+  // Resetar senha
   async resetPassword(email) {
     try {
       await sendPasswordResetEmail(auth, email);
       return { success: true };
     } catch (error) {
-      return this._handleError("enviar email de recuperação", error);
+      console.error("Reset password error:", error);
+      return { success: false, error: this.getErrorMessage(error.code) };
     }
   }
 
-  /**
-   * Observa mudanças no estado de autenticação.
-   */
-  onAuthStateChange(callback) {
-    try {
-      return onAuthStateChanged(auth, callback);
-    } catch (error) {
-      console.error("Erro ao configurar onAuthStateChanged:", error);
-      // Retorna uma função vazia para evitar erros
-      return () => {};
-    }
-  }
+  // Mensagens de erro traduzidas
+  getErrorMessage(errorCode) {
+    const errorMessages = {
+      "auth/email-already-in-use": "Este email já está em uso",
+      "auth/invalid-email": "Email inválido",
+      "auth/operation-not-allowed": "Operação não permitida",
+      "auth/weak-password": "Senha muito fraca. Use pelo menos 6 caracteres",
+      "auth/user-disabled": "Usuário desabilitado",
+      "auth/user-not-found": "Usuário não encontrado",
+      "auth/wrong-password": "Senha incorreta",
+      "auth/invalid-credential": "Credenciais inválidas",
+      "auth/too-many-requests": "Muitas tentativas. Tente novamente mais tarde",
+      "auth/network-request-failed": "Erro de conexão. Verifique sua internet",
+    };
 
-  /**
-   * ✅ CORRIGIDO: Obtém os dados do usuário (base + perfil específico).
-   * Agora com validações robustas e tratamento de erros aprimorado.
-   */
-  async getUserData(uid) {
-    try {
-      // Validação de entrada
-      if (!uid) {
-        return { 
-          success: false, 
-          error: "UID do usuário não fornecido" 
-        };
-      }
-
-      // Buscar documento base do usuário
-      const userDocRef = doc(db, COLLECTIONS.USERS, uid);
-      const userDoc = await getDoc(userDocRef);
-
-      if (!userDoc.exists()) {
-        console.warn(`Usuário ${uid} não encontrado no Firestore`);
-        return { 
-          success: false, 
-          error: "Usuário não encontrado no banco de dados" 
-        };
-      }
-
-      const userData = userDoc.data();
-
-      // Validar dados essenciais
-      if (!userData || !userData.userType) {
-        console.warn(`Dados do usuário ${uid} estão incompletos`);
-        return { 
-          success: false, 
-          error: "Dados do usuário estão incompletos" 
-        };
-      }
-
-      const userType = userData.userType;
-      let profileData = null;
-
-      // Buscar dados do perfil específico
-      const collectionName = this._getProfileCollectionName(userType);
-
-      if (collectionName) {
-        try {
-          const profileDocRef = doc(db, collectionName, uid);
-          const profileDoc = await getDoc(profileDocRef);
-
-          if (profileDoc.exists()) {
-            profileData = profileDoc.data();
-          } else {
-            console.warn(`Perfil não encontrado para usuário ${uid} na coleção ${collectionName}`);
-            // Não é erro fatal, perfil pode não existir ainda
-            profileData = {};
-          }
-        } catch (profileError) {
-          console.error(`Erro ao buscar perfil do usuário ${uid}:`, profileError);
-          // Não falha completamente, apenas retorna perfil vazio
-          profileData = {};
-        }
-      } else {
-        console.warn(`Tipo de usuário inválido: ${userType}`);
-        profileData = {};
-      }
-
-      // Retornar dados completos
-      return {
-        success: true,
-        userData: {
-          uid: uid,
-          email: userData.email,
-          userType: userData.userType,
-          isActive: userData.isActive ?? true,
-          createdAt: userData.createdAt,
-          updatedAt: userData.updatedAt,
-          profile: profileData || {},
-        },
-      };
-    } catch (error) {
-      console.error(`Erro crítico ao buscar dados do usuário ${uid}:`, error);
-      return this._handleError("buscar dados do usuário", error);
-    }
-  }
-
-  /**
-   * Cria um usuário do tipo RESPONSÁVEL para uma instituição.
-   */
-  async createResponsavel(
-    instituicaoId,
-    responsavelEmail,
-    responsavelNome,
-    senhaProvisoria
-  ) {
-    try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        responsavelEmail,
-        senhaProvisoria
-      );
-      const user = userCredential.user;
-
-      await this._saveBaseUserDoc(
-        user.uid,
-        responsavelEmail,
-        USER_TYPES.RESPONSAVEL
-      );
-
-      await setDoc(doc(db, COLLECTIONS.RESPONSAVEIS, user.uid), {
-        nome: responsavelNome,
-        instituicaoId: instituicaoId,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      await sendPasswordResetEmail(auth, responsavelEmail);
-
-      return { success: true, responsavelId: user.uid };
-    } catch (error) {
-      return this._handleError("criar responsável", error);
-    }
-  }
-
-  /**
-   * Método para cadastrar responsável (compatível com RegisterInstituicaoScreen)
-   */
-  async cadastrarResponsavel(instituicaoId, nome, email, senhaProvisoria) {
-    return this.createResponsavel(instituicaoId, email, nome, senhaProvisoria);
-  }
-
-  /**
-   * Atualiza os dados de perfil do usuário.
-   */
-  async updateProfile(uid, userType, updatedData) {
-    try {
-      const collectionName = this._getProfileCollectionName(userType);
-
-      if (!collectionName) {
-        throw new Error("Tipo de usuário inválido para atualização");
-      }
-
-      await setDoc(
-        doc(db, collectionName, uid),
-        {
-          ...updatedData,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      return { success: true };
-    } catch (error) {
-      return this._handleError("atualizar perfil", error);
-    }
-  }
-
-  /**
-   * Wrapper para updateProfile (compatível com AuthContext)
-   */
-  async updateUserProfile(uid, profileData) {
-    try {
-      // Buscar o userType do usuário
-      const userDoc = await getDoc(doc(db, COLLECTIONS.USERS, uid));
-      if (!userDoc.exists()) {
-        throw new Error("Usuário não encontrado");
-      }
-
-      const userData = userDoc.data();
-      const userType = userData.userType;
-
-      return await this.updateProfile(uid, userType, profileData);
-    } catch (error) {
-      return this._handleError("atualizar perfil de usuário", error);
-    }
+    return errorMessages[errorCode] || "Erro desconhecido. Tente novamente";
   }
 }
 

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import AuthService from "../services/authService";
+
 import { Alert } from "react-native";
+import AuthService from "../services/authService";
 
 const AuthContext = createContext(null);
 
@@ -25,7 +26,9 @@ export const AuthProvider = ({ children }) => {
     // ✅ Timeout de segurança para garantir que o loading nunca fique travado
     const safetyTimeout = setTimeout(() => {
       if (mounted && loading) {
-        console.warn("⚠️ Timeout de segurança ativado - forçando fim do loading");
+        console.warn(
+          "⚠️ Timeout de segurança ativado - forçando fim do loading"
+        );
         setLoading(false);
         setIsAuthenticated(false);
       }
@@ -47,8 +50,11 @@ export const AuthProvider = ({ children }) => {
               if (!mounted) return;
 
               if (result.success && result.userData) {
-                console.log("✅ Dados do usuário carregados:", result.userData.userType);
-                
+                console.log(
+                  "✅ Dados do usuário carregados:",
+                  result.userData.userType
+                );
+
                 // Validar dados mínimos necessários
                 if (result.userData.uid && result.userData.userType) {
                   setUserData(result.userData);
@@ -151,13 +157,10 @@ export const AuthProvider = ({ children }) => {
   };
 
   const register = async (email, password, userType, additionalData = {}) => {
+    console.log("🔥 REGISTER CHAMADO:", { email, userType });
     try {
-      const result = await AuthService.register(
-        email,
-        password,
-        userType,
-        additionalData
-      );
+      const authService = new AuthService();
+      await authService.register(email, password, userType, additionalData);
       if (result.success) {
         return { success: true, user: result.user };
       } else {
