@@ -49,6 +49,7 @@ const LoginScreen = ({ navigation }) => {
           result.error || "Não foi possível entrar. Verifique suas credenciais."
         );
       }
+      // Se success === true, o AuthContext e Navigator cuidarão da navegação
     } catch (error) {
       console.error("Login Error:", error);
       Alert.alert("Erro", "Ocorreu um erro inesperado. Tente novamente.");

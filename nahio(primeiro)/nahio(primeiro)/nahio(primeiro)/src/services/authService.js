@@ -19,7 +19,7 @@ class AuthService {
    */
   _handleError(operation, error) {
     console.error(`Erro ao ${operation}:`, error);
-    return { success: false, error: error.message };
+    return { success: false, error: error.message || "Erro desconhecido" };
   }
 
   /**
@@ -52,7 +52,6 @@ class AuthService {
     });
   }
 
-  // ✅ MÉTODO PRINCIPAL DE REGISTRO (compatível com AuthContext)
   /**
    * Registra um novo usuário no Auth e cria documentos no Firestore.
    * @param {string} email Email do usuário.
@@ -63,7 +62,7 @@ class AuthService {
    */
   async register(email, password, userType, additionalData = {}) {
     try {
-      // Normalizar userType para uppercase (se necessário)
+      // Normalizar userType para lowercase
       const normalizedUserType = userType.toLowerCase();
 
       // Mapear strings para constantes USER_TYPES
@@ -112,7 +111,6 @@ class AuthService {
     }
   }
 
-  // ✅ MANTIDO: Método antigo para compatibilidade (opcional)
   /**
    * @deprecated Use register() ao invés de registerUser()
    */
@@ -171,37 +169,95 @@ class AuthService {
    * Observa mudanças no estado de autenticação.
    */
   onAuthStateChange(callback) {
-    return onAuthStateChanged(auth, callback);
+    try {
+      return onAuthStateChanged(auth, callback);
+    } catch (error) {
+      console.error("Erro ao configurar onAuthStateChanged:", error);
+      // Retorna uma função vazia para evitar erros
+      return () => {};
+    }
   }
 
   /**
-   * Obtém os dados do usuário (base + perfil específico).
+   * ✅ CORRIGIDO: Obtém os dados do usuário (base + perfil específico).
+   * Agora com validações robustas e tratamento de erros aprimorado.
    */
   async getUserData(uid) {
     try {
-      const userDoc = await getDoc(doc(db, COLLECTIONS.USERS, uid));
+      // Validação de entrada
+      if (!uid) {
+        return { 
+          success: false, 
+          error: "UID do usuário não fornecido" 
+        };
+      }
+
+      // Buscar documento base do usuário
+      const userDocRef = doc(db, COLLECTIONS.USERS, uid);
+      const userDoc = await getDoc(userDocRef);
+
       if (!userDoc.exists()) {
-        return { success: false, error: "Usuário não encontrado" };
+        console.warn(`Usuário ${uid} não encontrado no Firestore`);
+        return { 
+          success: false, 
+          error: "Usuário não encontrado no banco de dados" 
+        };
       }
 
       const userData = userDoc.data();
+
+      // Validar dados essenciais
+      if (!userData || !userData.userType) {
+        console.warn(`Dados do usuário ${uid} estão incompletos`);
+        return { 
+          success: false, 
+          error: "Dados do usuário estão incompletos" 
+        };
+      }
+
       const userType = userData.userType;
       let profileData = null;
 
+      // Buscar dados do perfil específico
       const collectionName = this._getProfileCollectionName(userType);
 
       if (collectionName) {
-        const profileDoc = await getDoc(doc(db, collectionName, uid));
-        if (profileDoc.exists()) {
-          profileData = profileDoc.data();
+        try {
+          const profileDocRef = doc(db, collectionName, uid);
+          const profileDoc = await getDoc(profileDocRef);
+
+          if (profileDoc.exists()) {
+            profileData = profileDoc.data();
+          } else {
+            console.warn(`Perfil não encontrado para usuário ${uid} na coleção ${collectionName}`);
+            // Não é erro fatal, perfil pode não existir ainda
+            profileData = {};
+          }
+        } catch (profileError) {
+          console.error(`Erro ao buscar perfil do usuário ${uid}:`, profileError);
+          // Não falha completamente, apenas retorna perfil vazio
+          profileData = {};
         }
+      } else {
+        console.warn(`Tipo de usuário inválido: ${userType}`);
+        profileData = {};
       }
 
+      // Retornar dados completos
       return {
         success: true,
-        userData: { ...userData, profile: profileData },
+        userData: {
+          uid: uid,
+          email: userData.email,
+          userType: userData.userType,
+          isActive: userData.isActive ?? true,
+          createdAt: userData.createdAt,
+          updatedAt: userData.updatedAt,
+          profile: profileData || {},
+        },
       };
     } catch (error) {
+      console.error(`Erro crítico ao buscar dados do usuário ${uid}:`, error);
       return this._handleError("buscar dados do usuário", error);
     }
   }
@@ -245,7 +301,7 @@ class AuthService {
   }
 
   /**
-   * ✅ ADICIONADO: Método para cadastrar responsável (compatível com RegisterInstituicaoScreen)
+   * Método para cadastrar responsável (compatível com RegisterInstituicaoScreen)
    */
   async cadastrarResponsavel(instituicaoId, nome, email, senhaProvisoria) {
     return this.createResponsavel(instituicaoId, email, nome, senhaProvisoria);
@@ -278,7 +334,7 @@ class AuthService {
   }
 
   /**
-   * ✅ ADICIONADO: Wrapper para updateProfile (compatível com AuthContext)
+   * Wrapper para updateProfile (compatível com AuthContext)
    */
   async updateUserProfile(uid, profileData) {
     try {
